@@ -2282,6 +2282,18 @@ const PX = 3;   // taille d'un pixel pour le monde (moins pixélisé, UI reste n
     }
   }
 
+  // Les attaques de décor ont leur propre collision : auparavant les lasers, mines
+  // et murs étaient créés, mais restaient purement visuels.
+  function hurtHeart5(amount, x, y) {
+    const b = B5, h = b && b.heart;
+    if (!b || !h || b.invuln > 0 || h.airT > .08 || b.shieldT > 0) return false;
+    b.playerHp = Math.max(0, b.playerHp - amount);
+    b.invuln = .82; b.flash = 1; b.shake = 7; b.hitsTaken++;
+    spawnParticles5(h.x, h.y, '#ff6a7e', 11, 95);
+    floatText5(h.x + 11, h.y - 10, '-' + amount, '#ff8793');
+    return true;
+  }
+
   function updateLevel5(dt) {
     const b = B5;
     if (!b || state !== 'play') return;
@@ -2338,6 +2350,35 @@ const PX = 3;   // taille d'un pixel pour le monde (moins pixélisé, UI reste n
       if (h.dashT > 0) b.invuln = Math.max(b.invuln, .08);
       h.x = clamp(h.x + dx * heartSpeed * dt, box.x + 11, box.x + box.w - 11);
       h.y = clamp(h.y + dy * heartSpeed * dt, box.y + 11, box.y + box.h - 11);
+      // Dangers persistants des rounds spéciaux.
+      b.lasers=b.lasers.filter(l=>{
+        l.life-=dt; l.warm-=dt;
+        if(l.warm<=0){
+          const distance=l.vertical ? Math.abs(h.x-l.pos) : Math.abs(h.y-l.pos);
+          if(distance < l.width + h.r) hurtHeart5(4,l.vertical ? l.pos : h.x,l.vertical ? h.y : l.pos);
+        }
+        return l.life>0;
+      });
+      b.mines=b.mines.filter(m=>{
+        m.life-=dt;
+        if(Math.hypot(h.x-m.x,h.y-m.y)<m.r+h.r) {
+          if(hurtHeart5(5,m.x,m.y)) { spawnParticles5(m.x,m.y,'#ffb35c',20,125); return false; }
+        }
+        return m.life>0;
+      });
+      b.walls=b.walls.filter(w=>{
+        w.x+=w.vx*dt; w.life-=dt;
+        const inWall=h.x+h.r>w.x && h.x-h.r<w.x+w.w;
+        const inGap=h.y> w.gap-w.gapH/2 && h.y<w.gap+w.gapH/2;
+        if(inWall&&!inGap) hurtHeart5(4,w.x+w.w/2,h.y);
+        return w.life>0&&w.x<box.x+box.w+38;
+      });
+      if(b.gravityT>0){
+        b.gravityT-=dt;
+        const gx=box.x+box.w/2,gy=box.y+box.h/2,rx=gx-h.x,ry=gy-h.y,d=Math.hypot(rx,ry)||1;
+        h.x=clamp(h.x+rx/d*46*dt,box.x+11,box.x+box.w-11);
+        h.y=clamp(h.y+ry/d*46*dt,box.y+11,box.y+box.h-11);
+      }
       b.shovels=b.shovels.filter(s=>{
         s.x+=s.vx*dt;s.life-=dt;
         if(!s.used&&Math.hypot(h.x-s.x,h.y-s.y)<22){s.used=true;h.airT=1.05;b.invuln=Math.max(b.invuln,.25);spawnParticles5(h.x,h.y,'#a9f5ed',15,80);floatText5(h.x,h.y-18,'SAUT !','#a9f5ed');}
@@ -2362,11 +2403,7 @@ const PX = 3;   // taille d'un pixel pour le monde (moins pixélisé, UI reste n
           return false;
         }
         if (colliding && correctRule && b.invuln <= 0 && h.airT<=.08 && b.shieldT<=0) {
-          const damage = 2;
-          b.playerHp = Math.max(0, b.playerHp - damage);
-          b.invuln = .82; b.flash = 1; b.shake = 7; b.hitsTaken++;
-          spawnParticles5(h.x, h.y, '#ff6a7e', 11, 95);
-          floatText5(h.x + 11, h.y - 10, '-' + damage, '#ff8793');
+          hurtHeart5(2, p.x, p.y);
           return false;
         }
         return p.life > 0 && p.x > box.x - 55 && p.x < box.x + box.w + 55 && p.y > box.y - 35 && p.y < box.y + box.h + 35;
@@ -2721,7 +2758,25 @@ const PX = 3;   // taille d'un pixel pour le monde (moins pixélisé, UI reste n
     const box=b?b.box:{x:180,y:278,w:440,h:150};
     c.fillStyle='#05060b'; c.fillRect(box.x,box.y,box.w,box.h);
     c.strokeStyle='#f0edf2'; c.lineWidth=2; c.strokeRect(box.x,box.y,box.w,box.h);
-    if (b) { for(const d of b.dragons)drawDragon5(c,d,b.t,box); for(const s of b.shovels)drawShovel5(c,s); for (const p of b.bullets) drawPotatoProjectile5(c, p); }
+    if (b) {
+      // Les avertissements sont dessinés avant les projectiles : le joueur voit
+      // toujours clairement la zone à éviter.
+      for(const l of b.lasers){
+        const active=l.warm<=0, alpha=active?.85:.32+.22*Math.sin(b.t*12);
+        c.save();c.globalAlpha=alpha;c.strokeStyle=active?'#ff4c5d':'#ffb0a0';c.lineWidth=active?l.width*2:l.width;
+        c.beginPath(); if(l.vertical){c.moveTo(l.pos,box.y);c.lineTo(l.pos,box.y+box.h);}else{c.moveTo(box.x,l.pos);c.lineTo(box.x+box.w,l.pos);} c.stroke();c.restore();
+      }
+      for(const m of b.mines){
+        c.save();c.translate(m.x,m.y);c.fillStyle='#4d2630';c.beginPath();c.arc(0,0,m.r,0,Math.PI*2);c.fill();c.strokeStyle='#ff8171';c.lineWidth=2;c.stroke();c.fillStyle='#ff4055';c.fillRect(-3,-3,6,6);c.restore();
+      }
+      for(const w of b.walls){
+        c.fillStyle='#6b5a75';c.fillRect(w.x,w.y,w.w,w.gap-w.gapH/2-w.y);
+        c.fillRect(w.x,w.gap+w.gapH/2,w.w,box.y+box.h-(w.gap+w.gapH/2));
+        c.strokeStyle='#d9bf92';c.lineWidth=2;c.strokeRect(w.x,w.y,w.w,box.h-40);
+      }
+      if(b.gravityT>0){const gx=box.x+box.w/2,gy=box.y+box.h/2;c.save();c.globalAlpha=.28+.12*Math.sin(b.t*8);c.strokeStyle='#9c7cff';c.lineWidth=3;c.beginPath();c.arc(gx,gy,20+Math.sin(b.t*5)*4,0,Math.PI*2);c.stroke();c.restore();}
+      for(const d of b.dragons)drawDragon5(c,d,b.t,box); for(const s of b.shovels)drawShovel5(c,s); for (const p of b.bullets) drawPotatoProjectile5(c, p);
+    }
     // Âme du joueur.
     if (b && b.mode==='enemy') {
       const h=b.heart, blinking=b.invuln>0 && Math.floor(b.t*22)%2===0;
